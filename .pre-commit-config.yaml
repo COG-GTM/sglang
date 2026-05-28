@@ -1,5 +1,5 @@
 default_stages: [pre-commit, pre-push, manual]
-exclude: ^(python/sglang/multimodal_gen/csrc|python/sglang/jit_kernel/flash_attention/cute|sgl-model-gateway/patches/)
+exclude: ^(python/sglang/multimodal_gen/csrc|python/sglang/jit_kernel/flash_attention/cute)
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -22,7 +22,7 @@ repos:
       - id: check-merge-conflict
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
-        exclude: ^sgl-model-gateway/(tests/.*_test\.rs|patches/)$
+        exclude: ^sgl-model-gateway/tests/.*_test\.rs$
       - id: debug-statements
       - id: no-commit-to-branch
   - repo: https://github.com/PyCQA/isort
