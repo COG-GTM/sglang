@@ -855,7 +855,7 @@ python3 -m sglang_router.launch_router \
 | `--tls-cert-path` | Path to server certificate (PEM format) |
 | `--tls-key-path` | Path to server private key (PEM format) |
 
-Both parameters must be provided together. The gateway uses rustls with the ring crypto provider for TLS termination. If TLS is not configured, the gateway falls back to plain HTTP.
+Both parameters must be provided together. The gateway uses rustls with the aws-lc-rs crypto provider for TLS termination. If TLS is not configured, the gateway falls back to plain HTTP. For FIPS-compliant builds, add `--features fips` to the cargo build command (e.g., `cargo build --release --features fips`).
 
 ### mTLS for Worker Communication
 
