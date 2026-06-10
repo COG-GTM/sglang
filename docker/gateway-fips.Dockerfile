@@ -50,8 +50,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # aws-lc-fips-sys (pulled in by rustls's `fips` feature) requires
 # cmake, golang, and perl at build time.
 RUN dnf install -y git gcc gcc-c++ make cmake perl golang \
-    openssl-devel pkgconf-pkg-config protobuf-compiler protobuf-devel \
+    openssl-devel pkgconf-pkg-config unzip \
     && dnf clean all
+
+# protoc is not packaged in the UBI9 repos; install the official release.
+ARG PROTOC_VERSION=29.3
+RUN curl -fsSL -o /tmp/protoc.zip \
+        https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip \
+    && unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*' \
+    && rm -f /tmp/protoc.zip
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rustc --version && cargo --version && protoc --version
@@ -62,7 +69,7 @@ WORKDIR /opt/sglang/sgl-model-gateway
 
 # Build the standalone gateway binary and the Python wheel with the FIPS
 # crypto backend and WITHOUT vendored OpenSSL.
-RUN uv pip install maturin \
+RUN uv pip install maturin patchelf \
     && cargo build --release --bin sgl-model-gateway \
         --no-default-features --features grpc-client,fips \
     && cd bindings/python \
