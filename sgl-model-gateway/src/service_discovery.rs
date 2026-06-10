@@ -14,7 +14,6 @@ use kube::{
     },
     Client,
 };
-use rustls;
 use smg_mesh::service::{
     gossip::{NodeState, NodeStatus},
     ClusterState,
@@ -241,7 +240,7 @@ pub async fn start_service_discovery(
         }));
     }
 
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    crate::crypto::install_default_provider();
 
     let client = Client::try_default().await?;
 
