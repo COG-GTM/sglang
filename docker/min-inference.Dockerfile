@@ -1,4 +1,4 @@
-# Minimal single-node B200 (sm_100) inference image.
+# Minimal single-node inference image for H100/H200 (sm_90) and B200 (sm_100).
 #
 # Two stages:
 #   builder  - CUDA devel base. Installs sglang + prebuilt kernel wheels and the
@@ -8,7 +8,9 @@
 #              the GPU driver is injected by the NVIDIA container toolkit.
 #
 # Scope (on purpose):
-#   - One GPU arch: sm_100 (B200). No Hopper/GB200/arm64 branches.
+#   - GPU archs: sm_90 (H100/H200) + sm_100 (B200) by default; override
+#     TORCH_CUDA_ARCH_LIST (e.g. "10.0") for a single-arch build.
+#     No GB200/GB300 (sm_103) or arm64 branches.
 #   - One CUDA version: 13.0 (matches pyproject's cu13 pins).
 #   - Single-node serving: no RDMA/InfiniBand, GDRCopy, DeepEP, Mooncake, nixl.
 #   - No DeepGEMM JIT at runtime (no nvcc). FP8 MoE models that require
@@ -26,13 +28,14 @@
 #     with --model-path pointing at the mount.
 #
 # Build:
-#   docker build -f docker/b200-min.Dockerfile -t sglang:b200-min .
+#   docker build -f docker/min-inference.Dockerfile -t sglang:min-inference .
 # Run:
-#   docker run --gpus all --shm-size 32g -p 30000:30000 sglang:b200-min \
+#   docker run --gpus all --shm-size 32g -p 30000:30000 sglang:min-inference \
 #     python -m sglang.launch_server --model <model> --host 0.0.0.0
 
 ARG CUDA_VERSION=13.0.1
 ARG FLASHINFER_VERSION=0.6.11.post1
+ARG TORCH_CUDA_ARCH_LIST="9.0;10.0"
 
 ########################################################
 # Stage 1: builder
@@ -40,9 +43,9 @@ ARG FLASHINFER_VERSION=0.6.11.post1
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS builder
 
 ARG FLASHINFER_VERSION
+ARG TORCH_CUDA_ARCH_LIST
 ENV DEBIAN_FRONTEND=noninteractive
-# Only build kernels for B200.
-ENV TORCH_CUDA_ARCH_LIST="10.0"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.12-full python3.12-dev curl ca-certificates git protobuf-compiler \
