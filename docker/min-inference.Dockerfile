@@ -27,6 +27,13 @@
 #   - Air-gapped weights: mount models to a volume and set HF_HUB_OFFLINE=1
 #     with --model-path pointing at the mount.
 #
+# Older host drivers (CUDA forward compatibility):
+#   CUDA 13 wheels normally need an R580+ driver. For datacenter GPUs on older
+#   supported branches (R525+), the image bundles NVIDIA's forward-compat
+#   user-space driver libs at /usr/local/cuda/compat. Opt in per host with:
+#     docker run ... -e LD_LIBRARY_PATH="/usr/local/cuda/compat:/usr/local/nvidia/lib:/usr/local/nvidia/lib64" ...
+#   Do not set this on hosts whose driver is already >= the compat version.
+#
 # Build:
 #   docker build -f docker/min-inference.Dockerfile -t sglang:min-inference .
 # Run:
@@ -105,6 +112,9 @@ COPY --from=builder /usr/local/lib/python3.12/dist-packages /usr/lib/python3.12/
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder --chown=10001:10001 /root/.cache/huggingface /home/sglang/.cache/huggingface
 COPY --from=builder --chown=10001:10001 /root/.cache/sglang /home/sglang/.cache/sglang
+
+# CUDA forward-compatibility libs for older host drivers (opt-in, see header).
+COPY --from=builder /usr/local/cuda/compat /usr/local/cuda/compat
 
 RUN mkdir -p /workspace && chown 10001:10001 /workspace
 
