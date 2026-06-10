@@ -15,6 +15,16 @@
 #     DeepGEMM kernel compilation need either a prebaked ~/.cache/deep_gemm
 #     (mount or bake after a warmup run) or the full lmsysorg/sglang image.
 #
+# Hardened-deployment notes (FedRAMP/FedStart-style clusters):
+#   - Runs as a non-root numeric user (10001). Caches live under /home/sglang.
+#   - Native TLS: pass --ssl-certfile/--ssl-keyfile (and optionally
+#     --ssl-ca-certs, --enable-ssl-refresh) to launch_server; mount cluster
+#     cert material (ConfigMaps/Secrets) anywhere readable, e.g. /etc/certs.
+#     For outbound trust, point SSL_CERT_FILE / REQUESTS_CA_BUNDLE at the
+#     mounted CA bundle.
+#   - Air-gapped weights: mount models to a volume and set HF_HUB_OFFLINE=1
+#     with --model-path pointing at the mount.
+#
 # Build:
 #   docker build -f docker/b200-min.Dockerfile -t sglang:b200-min .
 # Run:
@@ -82,20 +92,27 @@ FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 RUN apk add --no-cache \
         python-3.12 py3.12-pip python-3.12-dev \
         gcc glibc-dev binutils \
-        numactl libgomp libstdc++ zlib openssl curl
+        numactl libgomp libstdc++ zlib openssl curl \
+    && addgroup -g 10001 sglang \
+    && adduser -D -u 10001 -G sglang -h /home/sglang sglang
 
 # Wheels and their bundled CUDA libs, copied from the Ubuntu builder.
 # manylinux wheels are glibc-based and run unchanged on Wolfi.
 COPY --from=builder /usr/local/lib/python3.12/dist-packages /usr/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
-COPY --from=builder /root/.cache/sglang /root/.cache/sglang
+COPY --from=builder --chown=10001:10001 /root/.cache/huggingface /home/sglang/.cache/huggingface
+COPY --from=builder --chown=10001:10001 /root/.cache/sglang /home/sglang/.cache/sglang
+
+RUN mkdir -p /workspace && chown 10001:10001 /workspace
 
 # GPU driver libraries are injected here by the NVIDIA container toolkit.
 ENV PATH="${PATH}:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="/usr/local/nvidia/lib:/usr/local/nvidia/lib64" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HOME=/home/sglang \
+    TRITON_CACHE_DIR=/home/sglang/.cache/triton
 
+USER 10001:10001
 WORKDIR /workspace
 
 CMD ["python3", "-m", "sglang.launch_server", "--help"]
