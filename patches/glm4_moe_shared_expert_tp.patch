@@ -1,6 +1,6 @@
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
-@@ -455,17 +455,8 @@
+@@ -473,17 +473,8 @@
                  quant_config=quant_config,
                  reduce_results=False,
                  prefix=add_prefix("shared_experts", prefix),
