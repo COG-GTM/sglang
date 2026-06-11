@@ -1,0 +1,18 @@
+--- a/python/sglang/srt/models/glm4_moe.py
++++ b/python/sglang/srt/models/glm4_moe.py
+@@ -590,6 +590,7 @@
+                 final_hidden_states *= self.routed_scaling_factor
+ 
+         current_stream.wait_stream(self.alt_stream)
++        shared_output = shared_output / self.tp_size
+         final_hidden_states += shared_output
+         if (
+             self.tp_size > 1
+@@ -623,6 +624,7 @@
+                 parallel_state.get_tp_group(), disabled=not is_allocation_symmetric()
+             ):
+                 final_hidden_states_out = torch.empty_like(final_hidden_states)
++            shared_output = shared_output / self.tp_size
+             torch.add(final_hidden_states, shared_output, out=final_hidden_states_out)
+             final_hidden_states = final_hidden_states_out
+         if (

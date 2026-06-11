@@ -55,7 +55,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.12-full python3.12-dev curl ca-certificates git protobuf-compiler \
+        python3.12-full python3.12-dev curl ca-certificates git protobuf-compiler patch \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 2 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 - --break-system-packages \
     && python3 -m pip config set global.break-system-packages true \
@@ -71,6 +71,11 @@ WORKDIR /build
 COPY python ./python
 COPY proto ./proto
 COPY rust/sglang-grpc ./rust/sglang-grpc
+
+# GLM-4 MoE shared-expert TP patches (from exa/fedstart/inference_server/patches).
+COPY patches ./patches
+RUN patch -p1 < patches/glm4_moe_shared_expert_tp.patch \
+    && patch -p1 < patches/glm4_moe_shared_output_tp_scale.patch
 
 # srt-only install: prebuilt sglang-kernel / flash-attn / flashinfer wheels,
 # torch cu13 from PyPI. Nothing is compiled against the local CUDA toolkit.
