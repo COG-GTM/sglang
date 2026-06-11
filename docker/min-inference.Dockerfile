@@ -117,6 +117,13 @@ RUN mkdir -p /opt/cuda-min/targets/x86_64-linux/lib \
               /opt/cuda-min/targets/x86_64-linux/lib/; \
         ln -s targets/x86_64-linux/include /opt/cuda-min/include; \
         ln -s targets/x86_64-linux/lib /opt/cuda-min/lib64; \
+        # Wolfi glibc declares rsqrt/rsqrtf with noexcept under _GNU_SOURCE
+        # (predefined by g++); align CUDA's host declarations so runtime JIT
+        # host compiles succeed against Wolfi headers.
+        sed -i -E \
+            -e 's/(__device_builtin__ double +rsqrt\(double x\)) *;/\1 noexcept (true);/' \
+            -e 's/(__device_builtin__ float +rsqrtf\(float x\)) *;/\1 noexcept (true);/' \
+            /opt/cuda-min/targets/x86_64-linux/include/crt/math_functions.h; \
     fi
 
 ########################################################
@@ -157,9 +164,6 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
     PATH="${PATH}:/usr/local/cuda/bin:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="/usr/local/nvidia/lib:/usr/local/nvidia/lib64" \
     CUDA_HOME=/usr/local/cuda \
-    # Wolfi's glibc declares rsqrt/rsqrtf under _GNU_SOURCE (predefined by g++),
-    # which collides with CUDA's math_functions.h during runtime kernel JIT.
-    NVCC_PREPEND_FLAGS="-Xcompiler -U_GNU_SOURCE" \
     PYTHONUNBUFFERED=1 \
     HOME=/home/sglang \
     TRITON_CACHE_DIR=/home/sglang/.cache/triton
