@@ -3,9 +3,14 @@
 # Two stages:
 #   builder  - CUDA devel base. Installs sglang + prebuilt kernel wheels and the
 #              FlashInfer JIT cache so no nvcc is needed at runtime.
-#   runtime  - Wolfi (Chainguard) base. No CUDA toolkit, no nvcc, no dev tools.
-#              CUDA libraries come bundled inside the pip wheels (torch cu13);
-#              the GPU driver is injected by the NVIDIA container toolkit.
+#   runtime  - Wolfi (Chainguard) base. No full CUDA toolkit or dev tools; CUDA
+#              libraries come bundled inside the pip wheels (torch cu13) and the
+#              GPU driver is injected by the NVIDIA container toolkit. A minimal
+#              compiler subset (nvcc/ptxas/nvvm + headers, ~400MB) is included
+#              by default so runtime JIT kernels (sgl-kernel jit, DeepGEMM)
+#              compile on first use; build with INCLUDE_NVCC=0 to drop it for a
+#              compiler-free image (then prebake or volume-mount the JIT caches
+#              under /home/sglang/.cache after a warmup run on a GPU node).
 #
 # Scope (on purpose):
 #   - GPU archs: sm_90 (H100/H200) + sm_100 (B200) by default; override
@@ -13,9 +18,6 @@
 #     No GB200/GB300 (sm_103) or arm64 branches.
 #   - One CUDA version: 13.0 (matches pyproject's cu13 pins).
 #   - Single-node serving: no RDMA/InfiniBand, GDRCopy, DeepEP, Mooncake, nixl.
-#   - No DeepGEMM JIT at runtime (no nvcc). FP8 MoE models that require
-#     DeepGEMM kernel compilation need either a prebaked ~/.cache/deep_gemm
-#     (mount or bake after a warmup run) or the full lmsysorg/sglang image.
 #
 # Hardened-deployment notes (FedRAMP/FedStart-style clusters):
 #   - Runs as a non-root numeric user (10001). Caches live under /home/sglang.
@@ -43,6 +45,8 @@
 ARG CUDA_VERSION=13.0.1
 ARG FLASHINFER_VERSION=0.6.11.post1
 ARG TORCH_CUDA_ARCH_LIST="9.0;10.0"
+# Set to 0 for a compiler-free runtime image (no runtime kernel JIT).
+ARG INCLUDE_NVCC=1
 
 ########################################################
 # Stage 1: builder
@@ -91,22 +95,41 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # never hits the network for them.
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /build/python && kernels lock . && kernels download . \
-    && mkdir -p /root/.cache/sglang \
+    && mkdir -p /root/.cache/sglang /root/.cache/huggingface \
     && if [ -f kernels.lock ]; then cp kernels.lock /root/.cache/sglang/; fi
 
 # Strip caches/tests to shrink the copy into the runtime stage.
 RUN find /usr/local/lib/python3.12/dist-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+# Assemble a minimal CUDA compiler subset (nvcc front-end, ptxas, nvvm/cicc,
+# headers, device runtime) for runtime kernel JIT. ~400MB vs ~5GB for the full
+# toolkit; left empty when INCLUDE_NVCC=0.
+ARG INCLUDE_NVCC
+RUN mkdir -p /opt/cuda-min/targets/x86_64-linux/lib \
+    && if [ "${INCLUDE_NVCC}" = "1" ]; then \
+        cuda=/usr/local/cuda; \
+        cp -a ${cuda}/bin /opt/cuda-min/bin; \
+        cp -a ${cuda}/nvvm /opt/cuda-min/nvvm; \
+        cp -a ${cuda}/targets/x86_64-linux/include /opt/cuda-min/targets/x86_64-linux/include; \
+        cp -a ${cuda}/targets/x86_64-linux/lib/libcudadevrt.a \
+              ${cuda}/targets/x86_64-linux/lib/libcudart.so* \
+              ${cuda}/targets/x86_64-linux/lib/libcudart_static.a \
+              /opt/cuda-min/targets/x86_64-linux/lib/; \
+        ln -s targets/x86_64-linux/include /opt/cuda-min/include; \
+        ln -s targets/x86_64-linux/lib /opt/cuda-min/lib64; \
+    fi
 
 ########################################################
 # Stage 2: runtime (Wolfi / Chainguard base)
 ########################################################
 FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 
-# gcc + python headers are needed by Triton's runtime launcher compilation
-# (host C stubs only - no CUDA toolkit / nvcc in this image).
+# gcc + python headers are needed by Triton's runtime launcher compilation and
+# as nvcc's host compiler for runtime kernel JIT. gcc 14 is the newest host
+# compiler CUDA 13's nvcc accepts (it rejects gcc > 15; Wolfi default is 16).
 RUN apk add --no-cache \
         python-3.12 py3.12-pip python-3.12-dev \
-        gcc glibc-dev binutils \
+        gcc-14-default glibc-dev binutils \
         numactl libgomp libstdc++ zlib openssl curl \
     && addgroup -g 10001 sglang \
     && adduser -D -u 10001 -G sglang -h /home/sglang sglang
@@ -121,11 +144,22 @@ COPY --from=builder --chown=10001:10001 /root/.cache/sglang /home/sglang/.cache/
 # CUDA forward-compatibility libs for older host drivers (opt-in, see header).
 COPY --from=builder /usr/local/cuda/compat /usr/local/cuda/compat
 
+# Minimal CUDA compiler subset for runtime JIT (empty when INCLUDE_NVCC=0).
+COPY --from=builder /opt/cuda-min /usr/local/cuda
+
 RUN mkdir -p /workspace && chown 10001:10001 /workspace
 
 # GPU driver libraries are injected here by the NVIDIA container toolkit.
-ENV PATH="${PATH}:/usr/local/nvidia/bin" \
+# NVIDIA_* vars are normally inherited from nvidia/cuda bases; set them
+# explicitly so the toolkit mounts compute libs (libcuda) under Kubernetes.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PATH="${PATH}:/usr/local/cuda/bin:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="/usr/local/nvidia/lib:/usr/local/nvidia/lib64" \
+    CUDA_HOME=/usr/local/cuda \
+    # Wolfi's glibc declares rsqrt/rsqrtf under _GNU_SOURCE (predefined by g++),
+    # which collides with CUDA's math_functions.h during runtime kernel JIT.
+    NVCC_PREPEND_FLAGS="-Xcompiler -U_GNU_SOURCE" \
     PYTHONUNBUFFERED=1 \
     HOME=/home/sglang \
     TRITON_CACHE_DIR=/home/sglang/.cache/triton
