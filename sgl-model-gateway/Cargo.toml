@@ -7,6 +7,7 @@ edition = "2021"
 default = ["grpc-client"]
 grpc-client = []
 grpc-server = []
+fips = ["rustls/fips"]
 
 vendored-openssl = ["openssl/vendored"]
 
@@ -85,7 +86,7 @@ data-connector = "=1.0.0"
 smg-mcp = "=1.0.0"
 smg-wasm = "=1.0.0"
 smg-mesh = "=1.0.0"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 rustls-pemfile = "2.2"
 openssl = "0.10.73"
 rmcp = { version = "0.8.3", features = ["client", "server",

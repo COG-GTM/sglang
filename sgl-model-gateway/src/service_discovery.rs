@@ -241,7 +241,7 @@ pub async fn start_service_discovery(
         }));
     }
 
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let client = Client::try_default().await?;
 
