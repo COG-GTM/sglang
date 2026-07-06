@@ -4,10 +4,18 @@ version = "0.3.2"
 edition = "2021"
 
 [features]
-default = ["grpc-client"]
+default = ["grpc-client", "tls-ring"]
 grpc-client = []
 grpc-server = []
 
+# TLS crypto provider backends. `tls-ring` (default) uses ring; `fips` uses
+# the aws-lc-rs FIPS provider (CMVP-validated AWS-LC cryptographic module).
+# For FIPS builds use: --no-default-features --features grpc-client,fips
+tls-ring = ["rustls/ring"]
+fips = ["rustls/fips"]
+
+# Statically links a non-validated OpenSSL into the binary; incompatible with
+# FIPS deployments, which must dynamically link the host's validated OpenSSL.
 vendored-openssl = ["openssl/vendored"]
 
 [lints.rust]
@@ -85,7 +93,7 @@ data-connector = "=1.0.0"
 smg-mcp = "=1.0.0"
 smg-wasm = "=1.0.0"
 smg-mesh = "=1.0.0"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.2"
 openssl = "0.10.73"
 rmcp = { version = "0.8.3", features = ["client", "server",

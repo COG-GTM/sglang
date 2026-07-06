@@ -13,7 +13,6 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use rustls::crypto::ring;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use smg_mesh::{
@@ -1069,9 +1068,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
         &config.router_config.server_key,
     ) {
         info!("TLS enabled");
-        ring::default_provider()
-            .install_default()
-            .map_err(|e| format!("Failed to install rustls ring provider: {e:?}"))?;
+        crate::crypto::install_default_provider();
 
         let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem(cert.clone(), key.clone())
             .await
