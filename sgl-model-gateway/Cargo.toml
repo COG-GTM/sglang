@@ -17,7 +17,15 @@ vendored-openssl = ["openssl/vendored"]
 # Use the AWS-LC FIPS module for all cryptography: rustls-based TLS,
 # JWT signature verification, and SHA-256 hashing. Requires cmake and Go
 # at build time. Default (non-fips) builds are unaffected.
-fips = ["rustls/fips", "jsonwebtoken/aws_lc_rs", "dep:aws-lc-rs", "aws-lc-rs/fips"]
+# aws-lc-fips-sys is pinned to the release bundling AWS-LC FIPS 3.1.0, the
+# exact software version validated on CMVP certificate #5314 (FIPS 140-3).
+fips = [
+    "rustls/fips",
+    "jsonwebtoken/aws_lc_rs",
+    "dep:aws-lc-rs",
+    "aws-lc-rs/fips",
+    "dep:aws-lc-fips-sys",
+]
 
 [lints.rust]
 unused_qualifications = "warn"
@@ -96,6 +104,7 @@ smg-wasm = "=1.0.0"
 smg-mesh = "=1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 aws-lc-rs = { version = "1", optional = true }
+aws-lc-fips-sys = { version = "=0.13.11", optional = true }
 rustls-pemfile = "2.2"
 openssl = "0.10.73"
 rmcp = { version = "0.8.3", features = ["client", "server",
