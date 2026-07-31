@@ -24,7 +24,12 @@ pub fn ensure_crypto_provider_installed() {
             "the fips feature is enabled but the installed rustls crypto provider is not FIPS-validated"
         );
 
-        let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
+        if let Err(existing) = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default() {
+            assert!(
+                std::ptr::eq(existing, &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER),
+                "the fips feature is enabled but a non-FIPS jsonwebtoken crypto provider is already installed"
+            );
+        }
     }
 }
 
