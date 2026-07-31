@@ -17,8 +17,9 @@ vendored-openssl = ["openssl/vendored"]
 # Use the AWS-LC FIPS module for all cryptography: rustls-based TLS,
 # JWT signature verification, and SHA-256 hashing. Requires cmake and Go
 # at build time. Default (non-fips) builds are unaffected.
-# aws-lc-fips-sys tracks the 0.13 line of the AWS-LC FIPS module
-# (CMVP-validated lineage, see https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md).
+# aws-lc-fips-sys is pinned exactly so the bundled AWS-LC FIPS module version
+# cannot change on a dependency refresh; re-check the CMVP certificate status
+# before bumping (see https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md).
 fips = [
     "rustls/fips",
     "jsonwebtoken/aws_lc_rs",

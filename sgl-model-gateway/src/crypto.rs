@@ -24,18 +24,21 @@ pub fn ensure_crypto_provider_installed() {
             "the fips feature is enabled but the installed rustls crypto provider is not FIPS-validated"
         );
 
-        // jsonwebtoken's process default can only be set once. Record whether
-        // this crate's aws-lc install won that race; if some other code
-        // installed a provider first, it may not be FIPS-validated.
+        // jsonwebtoken's process default can only be set once. Accept the
+        // result if the aws-lc provider is installed, whether by this call or
+        // by other code that installed the same provider earlier.
         static JWT_AWS_LC_INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let installed_by_us = *JWT_AWS_LC_INSTALLED.get_or_init(|| {
-            jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER
-                .install_default()
-                .is_ok()
+        let aws_lc_installed = *JWT_AWS_LC_INSTALLED.get_or_init(|| {
+            match jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default() {
+                Ok(()) => true,
+                Err(existing) => {
+                    std::ptr::eq(existing, &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER)
+                }
+            }
         });
         assert!(
-            installed_by_us,
-            "the fips feature is enabled but a jsonwebtoken crypto provider was already installed by other code"
+            aws_lc_installed,
+            "the fips feature is enabled but a non-aws-lc jsonwebtoken crypto provider was already installed by other code"
         );
     }
 }
