@@ -44,9 +44,7 @@ async fn create_test_context_with_wasm() -> Arc<AppContext> {
     let config = RouterConfig::default();
 
     // Initialize WASM manager first
-    let wasm_manager = Arc::new(
-        WasmModuleManager::with_default_config().expect("Failed to create WASM module manager"),
-    );
+    let wasm_manager = Arc::new(WasmModuleManager::with_default_config());
 
     // Create AppContext with wasm_manager from the start
     let client = reqwest::Client::new();
