@@ -46,7 +46,10 @@ bash "${SCRIPT_DIR}/../utils/install_rust_protoc.sh"
 GATEWAY_TOOLCHAIN_FILE="${SCRIPT_DIR}/../../../sgl-model-gateway/rust-toolchain.toml"
 GATEWAY_CHANNEL="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "${GATEWAY_TOOLCHAIN_FILE}" 2>/dev/null || true)"
 if [ -n "${GATEWAY_CHANNEL}" ]; then
-    rustup toolchain install --profile minimal --component clippy "${GATEWAY_CHANNEL}"
+    # Best-effort, matching install_rustup.sh: rustup lazily auto-installs the
+    # channel on first use if this pre-install flakes.
+    rustup toolchain install --profile minimal --component clippy "${GATEWAY_CHANNEL}" \
+        || echo "WARNING: could not pre-install ${GATEWAY_CHANNEL}; rustup will auto-install it on first cargo use"
     export RUSTUP_TOOLCHAIN="${GATEWAY_CHANNEL}"
     if [ -n "${GITHUB_ENV:-}" ]; then
         mkdir -p "$(dirname "${GITHUB_ENV}")" 2>/dev/null || true
