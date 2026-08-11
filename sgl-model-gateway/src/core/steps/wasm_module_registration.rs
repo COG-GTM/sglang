@@ -463,9 +463,8 @@ impl StepExecutor<WasmRegistrationWorkflowData> for RegisterModuleStep {
         let wasm_bytes = context
             .data
             .wasm_bytes
-            .as_ref()
-            .ok_or_else(|| WorkflowError::ContextValueNotFound("wasm_bytes".to_string()))?
-            .clone();
+            .take()
+            .ok_or_else(|| WorkflowError::ContextValueNotFound("wasm_bytes".to_string()))?;
 
         let descriptor = &context.data.config.descriptor;
 
