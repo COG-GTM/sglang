@@ -2405,13 +2405,53 @@ def _data_parallelism_defaults(view: Any) -> dict:
 
 
 @register_post_process
+def _tp_lm_head_all_to_all_default(view: Any) -> dict:
+    """Enable the TP LM-head all-to-all path only for pure-DP decode nodes.
+
+    Prefill-only and colocated nodes keep the feature disabled by default: the
+    LM-head weight layout is fixed at load time, so enabling the TP path would
+    also move their long prefills away from the communication-free DP LM head.
+    An explicit CLI value always wins.
+    """
+    if view.enable_tp_lm_head_all_to_all is not None:
+        return {}
+
+    enable = (
+        view.disaggregation_mode == "decode"
+        and view.enable_dp_attention
+        and view.dp_size > 1
+        and view.tp_size == view.dp_size
+        and view.attn_cp_size == 1
+        and not view.enable_dp_lm_head
+    )
+    return {"enable_tp_lm_head_all_to_all": enable}
+
+
+@register_post_process
 def _dp_lm_head_validation(view: Any) -> dict:
     """Read-only validation pass: dp-attention is a prerequisite for the
-    dp LM head. Reads the mid-resolution values through the view."""
+    dp LM head and the TP LM-head all-to-all path. Reads the mid-resolution
+    values through the view."""
     if view.enable_dp_lm_head:
         assert (
             view.enable_dp_attention
         ), "Please enable dp attention when setting enable_dp_lm_head. "
+    if view.enable_tp_lm_head_all_to_all:
+        assert view.enable_dp_attention, (
+            "Please enable dp attention when setting " "enable_tp_lm_head_all_to_all."
+        )
+        assert not view.enable_dp_lm_head, (
+            "--enable-tp-lm-head-all-to-all uses a TP-sharded LM head and is "
+            "incompatible with --enable-dp-lm-head."
+        )
+        assert view.tp_size == view.dp_size, (
+            "--enable-tp-lm-head-all-to-all currently requires tp_size == "
+            f"dp_size, got tp_size={view.tp_size}, dp_size={view.dp_size}."
+        )
+        assert view.attn_cp_size == 1, (
+            "--enable-tp-lm-head-all-to-all currently requires "
+            f"attn_cp_size == 1, got {view.attn_cp_size}."
+        )
     return {}
 
 
@@ -2506,7 +2546,7 @@ def _moe_runner_fusion_disable(view: Any) -> dict:
 def _a2a_fusion_adjustments(view: Any) -> dict:
     """A2A-backend-driven shared-experts fusion adjustments, declared at the
     legacy write slots in _handle_a2a_moe: Waterfill requires the
-    fusion enabled; FlashInfer A2A requires it disabled."""
+    fusion enabled; FlashInfer and DeepEP v2 A2A require it disabled."""
     if view.moe_a2a_backend in ("deepep", "megamoe") and view.enable_waterfill:
         if view.disable_shared_experts_fusion:
             logger.warning(
@@ -2519,6 +2559,10 @@ def _a2a_fusion_adjustments(view: Any) -> dict:
             "Flashinfer MoE A2A is enabled. --disable-shared-experts-fusion is automatically set."
         )
         return {"disable_shared_experts_fusion": True}
+    if view.moe_a2a_backend == "deepep_v2":
+        # DeepEP v2 has not validated fused shared experts yet; the handler
+        # rejects an explicit --enforce-shared-experts-fusion.
+        return {"disable_shared_experts_fusion": True}
     return {}
 
 
@@ -2527,6 +2571,7 @@ _A2A_EP_SPANNING_BACKENDS = frozenset(
     {
         "megamoe",
         "deepep",
+        "deepep_v2",
         "mooncake",
         "nixl",
         "ascend_fuseep",
