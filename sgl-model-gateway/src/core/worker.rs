@@ -33,7 +33,7 @@ pub const DEFAULT_WORKER_COST: f32 = 1.0;
 pub const DEFAULT_WORKER_HTTP_TIMEOUT_SECS: u64 = 30;
 
 static WORKER_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
+    crate::crypto::apply_fips_tls_backend(reqwest::Client::builder())
         .timeout(Duration::from_secs(DEFAULT_WORKER_HTTP_TIMEOUT_SECS))
         .build()
         .expect("Failed to create worker HTTP client")

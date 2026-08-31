@@ -14,9 +14,13 @@ grpc-server = []
 
 vendored-openssl = ["openssl/vendored"]
 
-# Use the AWS-LC FIPS module for all cryptography: rustls-based TLS,
-# JWT signature verification, and SHA-256 hashing. Requires cmake and Go
-# at build time. Default (non-fips) builds are unaffected.
+# Use the AWS-LC FIPS module for gateway-owned cryptography: rustls-based
+# TLS (inbound and outbound), JWT signature verification, and SHA-256
+# hashing. Requires cmake, Go, and Perl at build time. Default (non-fips)
+# builds are unaffected.
+# Note: rustls enables aws-lc-rs/aws-lc-sys unconditionally, so a fips build
+# compiles and links both the regular and the FIPS AWS-LC modules; only the
+# FIPS module is active on the configured runtime paths.
 # The bundled AWS-LC FIPS module version follows the latest aws-lc-fips-sys
 # release; record the module version from the built binary
 # (`strings <binary> | grep "AWS-LC FIPS"`) and re-check the CMVP certificate
@@ -98,7 +102,7 @@ reasoning-parser = "=1.0.0"
 openai-protocol = { version = "=1.0.0", features = ["axum"] }
 tool-parser = "=1.0.0"
 llm-tokenizer = "=1.3.2"
-smg-auth = "=1.2.2"
+smg-auth = "=1.2.3"
 wfaas = "=1.0.0"
 data-connector = "=1.0.0"
 smg-mcp = "=1.0.0"

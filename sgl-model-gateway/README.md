@@ -75,12 +75,31 @@ cargo build --release
 
 ### FIPS Builds
 For FedRAMP / IL4-IL5 environments, build with the `fips` feature to use the
-FIPS 140-3 validated AWS-LC cryptographic module (instead of ring) for all
-TLS, JWT signature verification, and SHA-256 hashing:
+FIPS 140-3 validated AWS-LC cryptographic module (instead of ring) for
+gateway-owned cryptography:
 ```bash
-# Requires cmake and Go at build time (used to compile AWS-LC)
+# Requires cmake, Go, and Perl at build time (used to compile AWS-LC)
 cargo build --release --features fips
 ```
+Covered by the `fips` feature: inbound HTTPS (axum-server/rustls), all
+outbound worker/provider/metadata HTTPS clients (forced onto the rustls
+backend in fips builds), the Kubernetes client, mTLS, JWT signature
+verification, and SHA-256 hashing on gateway-owned paths.
+
+Known scope limits:
+- `--control-plane-api-keys` hashes keys with RustCrypto SHA-256 inside
+  smg-auth, outside the validated module. Do not use control-plane static
+  API keys in FIPS deployments until smg-auth gains a fips passthrough.
+- Tokenizer downloads from HuggingFace go through `hf-hub` (via
+  `llm-tokenizer`), which uses native-tls (OpenSSL). In FIPS deployments,
+  use local tokenizer paths instead of HuggingFace model IDs.
+- Do not combine `fips` with `vendored-openssl` (as `docker/gateway.Dockerfile`
+  does for default builds): that statically links a non-FIPS OpenSSL that a
+  FIPS base image cannot replace. Build FIPS images without `vendored-openssl`.
+- Because rustls unconditionally enables aws-lc-sys, fips builds compile and
+  link both the regular and FIPS AWS-LC modules (plus ring/RustCrypto code);
+  startup assertions ensure only the FIPS module is active on runtime paths.
+
 Default builds are unaffected. Non-cryptographic hashing (blake3/xxhash for
 request routing and cache-aware load balancing) is not security-relevant and
 is unchanged in both builds. For full-stack compliance, run the FIPS binary

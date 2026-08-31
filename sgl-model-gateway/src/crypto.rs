@@ -27,19 +27,36 @@ pub fn ensure_crypto_provider_installed() {
         // jsonwebtoken's process default can only be set once. Accept the
         // result if the aws-lc provider is installed, whether by this call or
         // by other code that installed the same provider earlier.
-        static JWT_AWS_LC_INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let aws_lc_installed = *JWT_AWS_LC_INSTALLED.get_or_init(|| {
+        let aws_lc_installed =
             match jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default() {
                 Ok(()) => true,
                 Err(existing) => {
                     std::ptr::eq(existing, &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER)
                 }
-            }
-        });
+            };
         assert!(
             aws_lc_installed,
-            "the fips feature is enabled but a non-aws-lc jsonwebtoken crypto provider was already installed by other code"
+            "the fips feature is enabled but jsonwebtoken's process-default crypto provider is not aws-lc; \
+             this happens when a JWT operation ran before ensure_crypto_provider_installed() (latching \
+             jsonwebtoken's placeholder provider) or when other code installed a different provider"
         );
+    }
+}
+
+/// Applies the FIPS-required TLS backend to a reqwest client builder.
+///
+/// In `fips` builds this forces the rustls backend so outbound HTTPS uses the
+/// process-wide AWS-LC FIPS provider; without it, reqwest's `default-tls`
+/// feature (pulled in transitively) would select native-tls (OpenSSL).
+/// Default builds are returned unchanged.
+pub fn apply_fips_tls_backend(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    #[cfg(feature = "fips")]
+    {
+        builder.use_rustls_tls()
+    }
+    #[cfg(not(feature = "fips"))]
+    {
+        builder
     }
 }
 

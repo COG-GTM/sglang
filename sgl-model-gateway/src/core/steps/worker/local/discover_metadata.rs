@@ -18,7 +18,7 @@ use crate::{
 
 // HTTP client for metadata fetching
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
-    Client::builder()
+    crate::crypto::apply_fips_tls_backend(Client::builder())
         .timeout(Duration::from_secs(10))
         .build()
         .expect("Failed to create HTTP client")

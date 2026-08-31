@@ -328,7 +328,7 @@ impl AppContextBuilder {
         // backend to avoid unnecessary TLS initialization overhead.
         let has_tls_config = config.client_identity.is_some() || !config.ca_certificates.is_empty();
 
-        let mut client_builder = Client::builder()
+        let mut client_builder = crate::crypto::apply_fips_tls_backend(Client::builder())
             .pool_idle_timeout(Some(Duration::from_secs(config.pool_idle_timeout_secs)))
             .pool_max_idle_per_host(config.pool_max_idle_per_host)
             .timeout(Duration::from_secs(timeout_secs))
