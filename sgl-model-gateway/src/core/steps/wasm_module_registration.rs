@@ -404,7 +404,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for ValidateWasmComponentStep {
 
         // Create a temporary engine to validate the component
         let mut config = Config::new();
-        config.async_support(true);
         config.wasm_component_model(true);
 
         let engine = Engine::new(&config).map_err(|e| WorkflowError::StepFailed {
@@ -464,9 +463,8 @@ impl StepExecutor<WasmRegistrationWorkflowData> for RegisterModuleStep {
         let wasm_bytes = context
             .data
             .wasm_bytes
-            .as_ref()
-            .ok_or_else(|| WorkflowError::ContextValueNotFound("wasm_bytes".to_string()))?
-            .clone();
+            .take()
+            .ok_or_else(|| WorkflowError::ContextValueNotFound("wasm_bytes".to_string()))?;
 
         let descriptor = &context.data.config.descriptor;
 
@@ -501,7 +499,7 @@ impl StepExecutor<WasmRegistrationWorkflowData> for RegisterModuleStep {
                 last_accessed_at: now,
                 access_count: 0,
                 attach_points: descriptor.attach_points.clone(),
-                wasm_bytes,
+                wasm_bytes: Arc::new(wasm_bytes),
             },
         };
 
