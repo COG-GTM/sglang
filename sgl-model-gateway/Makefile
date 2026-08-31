@@ -49,7 +49,11 @@ check: ## Run cargo check and clippy
 	@echo "Running cargo check..."
 	@cargo check
 	@echo "Running clippy..."
-	@cargo clippy --all-targets --all-features -- -D warnings
+	@cargo clippy --all-targets --features grpc-client,grpc-server,vendored-openssl -- -D warnings
+
+check-fips: ## Run clippy with the fips feature (requires cmake, Go, Perl)
+	@echo "Running clippy (fips)..."
+	@cargo clippy --all-targets --features fips -- -D warnings
 
 fmt: ## Format code with rustfmt
 	@echo "Formatting code..."
