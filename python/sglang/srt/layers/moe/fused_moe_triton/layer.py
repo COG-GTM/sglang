@@ -100,6 +100,29 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _deferred_finalize_info_logged = False
 
 
+def _fuses_routed_scaling_factor_in_topk(quant_method) -> bool:
+    return (
+        getattr(quant_method, "fuse_routed_scaling_factor_in_topk", False)
+        or (
+            isinstance(quant_method, ModelOptNvFp4FusedMoEMethod)
+            and not getattr(
+                quant_method, "_moe_runner_backend", get_moe_runner_backend()
+            ).is_marlin()
+        )
+        or (
+            isinstance(quant_method, Fp8MoEMethod)
+            and (
+                get_moe_runner_backend().is_cutlass()
+                or get_moe_runner_backend().is_flashinfer_trtllm_routed()
+            )
+        )
+        or (
+            isinstance(quant_method, UnquantizedFusedMoEMethod)
+            and get_moe_runner_backend().is_flashinfer_trtllm_routed()
+        )
+    )
+
+
 def _copy_weight_view_before_h2d(loaded_weight: torch.Tensor) -> torch.Tensor:
     """Copy a CPU tensor view into independent contiguous storage."""
     if loaded_weight.device.type != "cpu":
@@ -183,6 +206,7 @@ def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
             num_experts=moe_runner_config.num_experts,
             num_local_experts=moe_runner_config.num_local_experts,
             hidden_size=moe_runner_config.hidden_size,
+            moe_runner_config=moe_runner_config,
         )
     else:
         raise NotImplementedError(f"Unsupported a2a backend: {a2a_backend}")
@@ -213,6 +237,34 @@ def _validate_hpc_ops_quant_method(quant_method) -> None:
         )
 
 
+def _validate_deepep_v2_quant_method(quant_method) -> None:
+    """Validate the FP8 contract consumed by the DeepEP v2 adapter."""
+    if not get_moe_a2a_backend().is_deepep_v2():
+        return
+
+    config = (
+        quant_method.quant_config if isinstance(quant_method, Fp8MoEMethod) else None
+    )
+    reason = None
+    if not isinstance(quant_method, Fp8MoEMethod):
+        reason = f"selected {type(quant_method).__name__}"
+    elif quant_method.use_mxfp8:
+        reason = "selected MXFP8 weights"
+    elif quant_method.is_fp4_expert:
+        reason = "selected FP4 experts"
+    elif list(quant_method.weight_block_size or []) != [128, 128]:
+        reason = f"has weight_block_size={quant_method.weight_block_size}"
+    elif config.activation_scheme != "dynamic":
+        reason = f"has activation_scheme={config.activation_scheme!r}"
+
+    if reason is not None:
+        raise ValueError(
+            "--moe-a2a-backend deepep_v2 requires 128x128 blockwise FP8 "
+            f"experts with dynamic activation scaling, but this layer {reason}. "
+            "Use a compatible checkpoint or --moe-a2a-backend deepep."
+        )
+
+
 class FusedMoE(torch.nn.Module):
     """FusedMoE layer for MoE models.
 
@@ -231,7 +283,10 @@ class FusedMoE(torch.nn.Module):
         params_dtype: Data type for the parameters.
         reduce_results: Whether to apply all_reduce on the output of the layer
         quant_config: Quantization configuration.
+        quant_method: Explicit quant method, overriding selection from quant_config.
         inplace: suggestion to compute inplace (modify input activation).
+        enable_qwen35_fp8_deferred_finalize: Whether this concrete Qwen3.5
+            layer may expose FlashInfer's block-FP8 deferred MoE output.
     """
 
     # True on shared-expert FusedMoE subclasses (e.g. Inkling's sink); lets
@@ -270,6 +325,8 @@ class FusedMoE(torch.nn.Module):
         routing_method_type: Optional[RoutingMethodType] = None,
         is_gated: bool = True,
         gate_up_interleaved: bool = True,
+        enable_qwen35_fp8_deferred_finalize: bool = False,
+        quant_method: Optional[FusedMoEMethodBase] = None,
     ):
         super().__init__()
         if params_dtype is None:
@@ -375,17 +432,19 @@ class FusedMoE(torch.nn.Module):
             gate_up_interleaved=gate_up_interleaved,
         )
 
-        self.quant_method: Optional[FusedMoEMethodBase] = None
+        self.quant_method = quant_method
         server_args = get_server_args()
         kt_config = create_kt_config_from_server_args(server_args, layer_id)
         if kt_config is not None:
-            if quant_config is not None:
+            if self.quant_method is not None:
+                gpu_method = self.quant_method
+            elif quant_config is not None:
                 gpu_method = quant_config.get_quant_method(self, prefix)
             else:
                 gpu_method = UnquantizedFusedMoEMethod(self.use_triton_kernels)
             self.quant_method = KTEPWrapperMethod(gpu_method, kt_config)
         else:
-            if quant_config is not None:
+            if self.quant_method is None and quant_config is not None:
                 self.quant_method = quant_config.get_quant_method(self, prefix)
             if self.quant_method is None:
                 self.quant_method = UnquantizedFusedMoEMethod(
@@ -394,10 +453,18 @@ class FusedMoE(torch.nn.Module):
                     self.use_deep_gemm,
                 )
         _validate_hpc_ops_quant_method(self.quant_method)
+        _validate_deepep_v2_quant_method(self.quant_method)
+        nvfp4_deferred = envs.SGLANG_ENABLE_MOE_DEFERRED_FINALIZE.get() and isinstance(
+            self.quant_method, ModelOptNvFp4FusedMoEMethod
+        )
+        qwen35_fp8_deferred = (
+            enable_qwen35_fp8_deferred_finalize
+            and isinstance(self.quant_method, Fp8MoEMethod)
+            and self.quant_method.block_quant
+        )
         self.supports_deferred_finalize = (
-            envs.SGLANG_ENABLE_MOE_DEFERRED_FINALIZE.get()
-            and get_moe_runner_backend().is_flashinfer_trtllm()
-            and isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
+            get_moe_runner_backend().is_flashinfer_trtllm()
+            and (nvfp4_deferred or qwen35_fp8_deferred)
         )
         global _deferred_finalize_info_logged
         if not _deferred_finalize_info_logged:
@@ -451,23 +518,7 @@ class FusedMoE(torch.nn.Module):
             self.moe_runner_config.inplace = False
 
         self.should_fuse_routed_scaling_factor_in_topk = (
-            (
-                isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-                and not getattr(
-                    self.quant_method, "_moe_runner_backend", get_moe_runner_backend()
-                ).is_marlin()
-            )
-            or (
-                isinstance(self.quant_method, Fp8MoEMethod)
-                and (
-                    get_moe_runner_backend().is_cutlass()
-                    or get_moe_runner_backend().is_flashinfer_trtllm_routed()
-                )
-            )
-            or (
-                isinstance(self.quant_method, UnquantizedFusedMoEMethod)
-                and get_moe_runner_backend().is_flashinfer_trtllm_routed()
-            )
+            _fuses_routed_scaling_factor_in_topk(self.quant_method)
         )
 
         self.routing_method_type = routing_method_type
@@ -478,8 +529,7 @@ class FusedMoE(torch.nn.Module):
 
         self._dwdp_bound = False
 
-        if self.quant_method is not None and hasattr(self.quant_method, "runner"):
-            self.runner = self.quant_method.runner
+        self.runner = self.quant_method.runner
 
     @property
     def num_global_routed_experts(self) -> int:
@@ -1638,7 +1688,7 @@ class FusedMoE(torch.nn.Module):
     def set_overlap_args(
         self, down_gemm_overlap_args: DownGemmOverlapArgs, meta_overlap_args: dict
     ):
-        if hasattr(self, "runner"):
+        if self.runner is not None:
             self.runner.set_overlap_args(down_gemm_overlap_args, meta_overlap_args)
         else:
             # TODO: remove this branch after MoE refactor
@@ -1646,7 +1696,7 @@ class FusedMoE(torch.nn.Module):
             self.meta_overlap_args = meta_overlap_args
 
     def clear_overlap_args(self) -> None:
-        if hasattr(self, "runner"):
+        if self.runner is not None:
             self.runner.clear_overlap_args()
         else:
             # TODO: remove this branch after MoE refactor
