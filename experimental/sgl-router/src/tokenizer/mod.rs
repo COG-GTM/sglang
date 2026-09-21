@@ -329,6 +329,7 @@ mod tests {
         )
         .unwrap();
         let cfg = adapter::ModelFiles::open(tok.to_str().unwrap())
+            .unwrap()
             .json("tokenizer_config.json")
             .unwrap()
             .expect("sibling tokenizer_config.json is loaded");
@@ -391,6 +392,7 @@ mod tests {
         let tok = dir.path().join("tokenizer.json");
         std::fs::write(&tok, "{}").unwrap();
         assert!(adapter::ModelFiles::open(tok.to_str().unwrap())
+            .unwrap()
             .json("tokenizer_config.json")
             .unwrap()
             .is_none());

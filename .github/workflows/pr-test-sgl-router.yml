@@ -262,6 +262,61 @@ jobs:
           echo "## Tier-2 results" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build duration: \`${tier_2_build_duration_seconds:-(not recorded)}\` s" >> "$GITHUB_STEP_SUMMARY"
 
+  sgl-router-fips:
+    name: tier-2 — ${{ matrix.feature }}
+    needs: [sgl-router-gate, sgl-router-lint]
+    if: needs.sgl-router-gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [fips, fips-aws-lc]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo bash scripts/ci/utils/install_protoc.sh
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake golang-go perl clang libclang-dev libssl-dev pkg-config
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experimental/sgl-router
+          shared-key: "sgl-router-${{ matrix.feature }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build OpenSSL test provider
+        if: matrix.feature == 'fips'
+        working-directory: experimental/sgl-router
+        run: |
+          prefix="$HOME/sgl-router-test-openssl"
+          bash tests/scripts/build_test_openssl.sh "$prefix"
+          echo "OPENSSL_DIR=$prefix" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=0" >> "$GITHUB_ENV"
+          echo "OPENSSL_NO_VENDOR=1" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=bash $PWD/tests/scripts/run_with_openssl_fips.sh" >> "$GITHUB_ENV"
+      - name: Check and lint FIPS backend
+        working-directory: experimental/sgl-router
+        run: |
+          cargo check --locked --workspace --all-targets --features "${{ matrix.feature }}"
+          cargo clippy --locked --workspace --all-targets --features "${{ matrix.feature }}" -- -D warnings
+      - name: Build and test FIPS backend
+        working-directory: experimental/sgl-router
+        run: |
+          cargo build --locked --release --workspace --features "${{ matrix.feature }}"
+          cargo test --locked --release --workspace --features "${{ matrix.feature }}" -- --skip parity_matrix
+      - name: Verify dynamic OpenSSL linkage
+        if: matrix.feature == 'fips'
+        working-directory: experimental/sgl-router
+        run: |
+          LD_LIBRARY_PATH="$OPENSSL_DIR/lib" python3 - <<'PY'
+          import subprocess
+          libraries = subprocess.check_output(["ldd", "target/release/sgl-router"], text=True)
+          print(libraries)
+          assert "libcrypto.so.3" in libraries, "OpenSSL backend must link libcrypto dynamically"
+          PY
+
   sgl-router-docker-build-test:
     name: tier-3 — docker (placeholder)
     needs: [sgl-router-gate, sgl-router-build-and-test]
@@ -393,6 +448,7 @@ jobs:
       - sgl-router-gate
       - sgl-router-lint
       - sgl-router-build-and-test
+      - sgl-router-fips
       - sgl-router-docker-build-test
       - sgl-router-k8s-integration
       - sgl-router-e2e

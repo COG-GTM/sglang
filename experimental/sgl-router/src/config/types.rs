@@ -224,6 +224,7 @@ impl std::fmt::Display for StickyFallbackKind {
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    pub tls_ca_bundle: Option<std::path::PathBuf>,
     pub host: String,
     pub port: u16,
     /// Pause after SIGTERM with `/readyz` returning 503 before stopping accepts.
@@ -257,6 +258,7 @@ pub fn default_shutdown_drain_secs() -> u64 {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            tls_ca_bundle: None,
             host: default_host(),
             port: default_port(),
             shutdown_drain_secs: default_shutdown_drain_secs(),

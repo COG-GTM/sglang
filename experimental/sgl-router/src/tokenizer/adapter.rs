@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use dynamo_tokenizers::{traits::DecodeResult, Tokenizer};
+use hf_hub::api::sync::ApiBuilder;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ pub fn load(source: &str) -> Result<Arc<Tokenizer>> {
             .map(Arc::new)
             .with_context(|| format!("load tokenizer from {source}"));
     }
+    require_local_assets(false)?;
     let downloaded = download_tokenizer(source)?;
     let path = downloaded
         .to_str()
@@ -21,6 +23,15 @@ pub fn load(source: &str) -> Result<Arc<Tokenizer>> {
     Tokenizer::from_file(path)
         .map(Arc::new)
         .with_context(|| format!("load downloaded tokenizer for {source}"))
+}
+
+fn require_local_assets(is_local: bool) -> Result<()> {
+    ensure!(
+        !crate::tls::FIPS || is_local,
+        "FIPS builds require local tokenizer and model assets; \
+         pass --tokenizer-path with a packaged tokenizer file"
+    );
+    Ok(())
 }
 
 /// Treat `source` as a filesystem path (rather than a HuggingFace repo id)
@@ -58,7 +69,6 @@ fn download_tokenizer(repo_id: &str) -> Result<std::path::PathBuf> {
 
 /// Download `file` from a HuggingFace repo id and return the cached local path.
 fn download_repo_file(repo_id: &str, file: &str) -> Result<std::path::PathBuf> {
-    use hf_hub::api::sync::ApiBuilder;
     let api = ApiBuilder::from_env()
         .build()
         .context("initialize HuggingFace Hub client")?;
@@ -71,7 +81,6 @@ fn download_repo_file(repo_id: &str, file: &str) -> Result<std::path::PathBuf> {
 /// fails, e.g. offline with a warm cache; the caller then attempts each
 /// download individually, which is cache-first.
 fn list_repo_files(repo_id: &str) -> Option<std::collections::HashSet<String>> {
-    use hf_hub::api::sync::ApiBuilder;
     let listing = ApiBuilder::from_env()
         .build()
         .context("initialize HuggingFace Hub client")
@@ -103,21 +112,22 @@ pub struct ModelFiles {
 }
 
 impl ModelFiles {
-    pub fn open(source: &str) -> Self {
+    pub fn open(source: &str) -> Result<Self> {
         let local_dir = (Path::new(source).is_file() || looks_like_path(source)).then(|| {
             Path::new(source)
                 .parent()
                 .map_or_else(Default::default, Path::to_path_buf)
         });
+        require_local_assets(local_dir.is_some())?;
         let repo_files = match local_dir {
             Some(_) => None,
             None => list_repo_files(source),
         };
-        Self {
+        Ok(Self {
             source: source.to_owned(),
             local_dir,
             repo_files,
-        }
+        })
     }
 
     fn path(&self, file: &str) -> Option<std::path::PathBuf> {
@@ -203,7 +213,7 @@ mod model_files_tests {
         std::fs::write(dir.path().join("config.json"), r#"{"model_type":"llama"}"#).unwrap();
         std::fs::write(dir.path().join("chat_template.jinja"), "{{ messages }}").unwrap();
 
-        let files = ModelFiles::open(tokenizer.to_str().unwrap());
+        let files = ModelFiles::open(tokenizer.to_str().unwrap()).unwrap();
         assert_eq!(
             files.json("config.json").unwrap(),
             Some(json!({"model_type":"llama"}))
@@ -223,8 +233,23 @@ mod model_files_tests {
         std::fs::write(&tokenizer, "{}").unwrap();
         std::fs::write(dir.path().join("config.json"), "invalid JSON").unwrap();
 
-        let files = ModelFiles::open(tokenizer.to_str().unwrap());
+        let files = ModelFiles::open(tokenizer.to_str().unwrap()).unwrap();
         let error = files.json("config.json").unwrap_err();
         assert!(error.to_string().contains("config.json"));
+    }
+
+    #[test]
+    #[cfg(any(feature = "fips", feature = "fips-aws-lc", feature = "fips-openssl"))]
+    fn remote_tokenizer_and_sibling_sources_are_rejected() {
+        for source in ["organization/model", "gpt2"] {
+            let error = super::load(source)
+                .err()
+                .expect("remote tokenizer rejected");
+            assert!(error.to_string().contains("require local tokenizer"));
+            let error = ModelFiles::open(source)
+                .err()
+                .expect("remote model assets rejected");
+            assert!(error.to_string().contains("require local tokenizer"));
+        }
     }
 }

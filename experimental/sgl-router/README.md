@@ -16,6 +16,104 @@ cd experimental/sgl-router
 cargo build --release
 ```
 
+### FIPS backends
+
+FIPS support is opt-in. Select one backend and build with the committed lockfile.
+The backends are mutually exclusive; `--all-features` is not supported.
+
+| Feature | TLS cryptography | Deployment requirement |
+| --- | --- | --- |
+| `fips` (alias for `fips-openssl`) | Rustls with `rustls-openssl` 0.4.1 and dynamically linked OpenSSL 3 | A compatible runtime library, configured FIPS provider, and vendor-supported operating environment |
+| `fips-aws-lc` | Rustls with `aws-lc-rs` 1.18.1 and `aws-lc-fips-sys` 0.14.2, bundling AWS-LC FIPS 4.2.0 | Qualification of that exact module, build, and operating environment |
+
+Both backends initialize before tokenizer loading or discovery, verify the
+provider and TLS configuration, require TLS 1.2 Extended Master Secret, and
+reject a previously installed Rustls provider. They cover worker forwarding,
+introspection, engine monitoring, and Kubernetes API HTTPS. Neither backend
+changes the default build, which continues to use ring for TLS.
+
+**OpenSSL runtime integration.** Build in an environment with the target
+runtime's OpenSSL development libraries and `pkg-config`:
+
+```bash
+OPENSSL_NO_VENDOR=1 OPENSSL_STATIC=0 \
+  cargo build --locked --release --features fips
+```
+
+Package the resulting binary with the matching OpenSSL runtime libraries and
+FIPS provider. Preserve the vendor's module configuration, integrity data, and
+`OPENSSL_CONF` / `OPENSSL_MODULES` settings. The configuration must enable
+`fips=yes`; an absent provider or disabled FIPS mode stops startup. Inspect
+dynamic linkage with `ldd target/release/sgl-router` and run the vendor's
+module verification procedure in the final image.
+
+A FIPS Rust builder image is a build stage, not necessarily a runtime image.
+For example, Chainguard documents building with `rust-fips` and running with a
+compatible `glibc-openssl-fips` image. Image references, entitlement, digest
+pins, and verification evidence belong in the deployment repository. See
+[Chainguard's Rust FIPS guide](https://images.chainguard.dev/directory/image/rust-fips/overview)
+and [runtime verification instructions](https://edu.chainguard.dev/chainguard/fips/verify-fips/#openssl).
+
+**AWS-LC alternative.** The source build requires a C/C++ compiler, CMake, Go,
+Perl, and Clang/libclang:
+
+```bash
+cargo build --locked --release --features fips-aws-lc
+cargo tree --locked --features fips-aws-lc -i aws-lc-fips-sys
+```
+
+This normally embeds AWS-LC; a FIPS base image does not replace that module
+with its OpenSSL provider. Startup logs report the AWS-LC version and module
+generation. Review lockfile changes against the
+[AWS-LC FIPS guidance](https://docs.rs/aws-lc-rs/1.18.1/aws_lc_rs/#fips).
+The AWS-LC 3.1.0 validation ([CMVP #5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314))
+does not qualify the bundled 4.2.0 module.
+
+**Trust and assets.** `--tls-ca-bundle FILE` optionally names a PEM file whose
+certificates replace the HTTPS trust roots, including Kubernetes roots. The
+bundle is read once at initialization; unreadable, empty, or invalid bundles
+stop startup. Without it, HTTP clients use Mozilla roots and Kubernetes uses
+its normal kubeconfig/service-account trust configuration. FIPS builds reject
+Kubernetes `insecure-skip-tls-verify`.
+
+In either FIPS build, pass `--tokenizer-path` with a local file. Package the
+model's required sibling files (`config.json`, `tokenizer_config.json`, chat
+templates, and any native-format assets) with it. Repository IDs and implicit
+Hugging Face download fallback are rejected before a Hub client is created.
+The default build retains Hub downloads.
+
+**Transport boundary.** Inbound HTTP/h2c, worker HTTP/h2c, ZMQ event traffic,
+and the current KV indexer's plaintext gRPC transport remain cleartext at the
+application layer. The router rejects HTTPS indexer endpoints because the linked
+gRPC transport has no TLS support. It does not terminate inbound TLS.
+Protect those paths with an appropriately configured proxy or
+mesh and network policies. Kubernetes authentication and TLS server-name
+overrides continue to work.
+
+FIPS-mode checks and CI tests establish configuration and behavior, not CMVP
+validation or FedRAMP/IL4/IL5 authorization. Production qualification includes
+the exact cryptographic module, its security policy, approved services,
+entropy source, build, and operating environment. Other dependencies still
+contain cryptographic implementations, including tokenizer download code
+that the FIPS entry points exclude and non-security cache hashing.
+
+For local backend regression tests:
+
+```bash
+cargo test --locked --workspace -- --skip parity_matrix
+cargo test --locked --workspace --features fips-aws-lc -- --skip parity_matrix
+
+# Public test provider only; do not use this build as production evidence.
+export OPENSSL_DIR="$HOME/sgl-router-test-openssl"
+bash tests/scripts/build_test_openssl.sh "$OPENSSL_DIR"
+export OPENSSL_NO_VENDOR=1 OPENSSL_STATIC=0
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="bash $PWD/tests/scripts/run_with_openssl_fips.sh"
+cargo test --locked --workspace --features fips -- --skip parity_matrix
+```
+
+CI covers Linux x86_64. The test runner scopes the OpenSSL FIPS configuration to
+test executables so it does not alter Cargo's own cryptographic dependencies.
+
 ## Running
 
 The router is configured entirely through CLI flags (run

@@ -134,7 +134,8 @@ impl KvEventIndex {
     /// Build an empty index and spawn the pump task.
     pub fn new() -> Arc<Self> {
         Self::new_with_http(
-            reqwest::Client::builder()
+            crate::tls::client_builder()
+                .expect("configure engine monitor TLS")
                 .timeout(Duration::from_secs(2))
                 .build()
                 .expect("default http client builds"),

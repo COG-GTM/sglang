@@ -17,5 +17,6 @@ pub mod policies_reorg;
 pub mod proxy;
 pub mod server;
 pub mod state;
+pub mod tls;
 pub mod tokenizer;
 pub mod workers;

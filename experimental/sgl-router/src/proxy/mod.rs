@@ -118,7 +118,7 @@ pub struct Proxy {
 /// what Granian's `HTTPModes.auto` serves on a plaintext port; plaintext has
 /// no ALPN, so prior knowledge is the only way to reach it.
 fn build_client(protocol: WireProtocol) -> Result<Client, anyhow::Error> {
-    let builder = Client::builder()
+    let builder = crate::tls::client_builder()?
         .pool_max_idle_per_host(64)
         .connect_timeout(Duration::from_secs(5));
     match protocol {

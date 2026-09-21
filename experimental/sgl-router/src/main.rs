@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use sgl_kv_indexer::{GrpcPrefixIndex, PrefixIndex, PrefixIndexConfig};
 use sgl_router::{
@@ -58,6 +58,8 @@ async fn main() -> Result<()> {
         &config.observability.log_level,
         config.observability.log_format,
     )?;
+    sgl_router::tls::initialize(config.server.tls_ca_bundle.as_deref())
+        .context("initialize outbound TLS")?;
 
     // Buffer termination signals before tokenizer loading or discovery can block startup.
     let (sigterm, sigint) = install_signal_handlers()?;
@@ -203,6 +205,11 @@ fn create_external_kv_indexer_client(config: &Config) -> Result<Option<Arc<dyn P
         .and_then(|cache| cache.kv_indexer_endpoint.as_ref());
     endpoint
         .map(|endpoint| {
+            ensure!(
+                url::Url::parse(&endpoint.url)?.scheme() == "http",
+                "KV Indexer transport has no TLS support; use an http:// endpoint \
+                 with deployment-provided transport protection"
+            );
             GrpcPrefixIndex::new(prefix_index_config(endpoint))
                 .map(|index| Arc::new(index) as Arc<dyn PrefixIndex>)
                 .context("configure KV Indexer client")
@@ -219,7 +226,8 @@ fn prefix_index_config(indexer: &KvIndexerEndpointConfig) -> PrefixIndexConfig {
 }
 
 fn start_engine_state_monitor(use_external_indexer: bool) -> Arc<KvEventIndex> {
-    let http = reqwest::Client::builder()
+    let http = sgl_router::tls::client_builder()
+        .expect("router TLS initialized at startup")
         .timeout(Duration::from_secs(2))
         .build()
         .expect("default http client builds");

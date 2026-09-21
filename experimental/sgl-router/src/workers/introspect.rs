@@ -95,7 +95,8 @@ impl WorkerIntrospector {
     /// request timeout.  Production callers pass `SERVER_INFO_TIMEOUT`
     /// via `default()`; tests may pass shorter timeouts.
     pub fn new(timeout: Duration) -> Self {
-        let client = reqwest::Client::builder()
+        let client = crate::tls::client_builder()
+            .expect("configure introspector TLS")
             .timeout(timeout)
             .build()
             .expect("introspector http client builds");
