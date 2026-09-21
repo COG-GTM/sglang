@@ -44,6 +44,14 @@ async fn invalid_ca_bundle_stops_the_binary_before_serving() {
 #[tokio::test]
 async fn openssl_without_fips_properties_stops_the_binary() {
     let config = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        config.path(),
+        include_str!("../fixtures/openssl-fips.cnf").replace(
+            "default_properties = fips=yes",
+            "default_properties = fips=no",
+        ),
+    )
+    .unwrap();
     let output = tokio::time::timeout(
         Duration::from_secs(10),
         router().env("OPENSSL_CONF", config.path()).output(),

@@ -301,6 +301,10 @@ jobs:
         run: |
           cargo check --locked --workspace --all-targets --features "${{ matrix.feature }}"
           cargo clippy --locked --workspace --all-targets --features "${{ matrix.feature }}" -- -D warnings
+      - name: Check documented AWS-LC module dependency
+        if: matrix.feature == 'fips-aws-lc'
+        working-directory: experimental/sgl-router
+        run: cargo tree --locked --features fips-aws-lc -i aws-lc-fips-sys@0.14.2
       - name: Build and test FIPS backend
         working-directory: experimental/sgl-router
         run: |
