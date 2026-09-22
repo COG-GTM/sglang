@@ -47,7 +47,7 @@ pub struct ChatFormatter {
 impl ChatFormatter {
     /// Load model files and select a template or native formatter from dynamo-render.
     pub fn load(model_id: &str, tokenizer_path: &str) -> Result<Option<Self>> {
-        let files = super::adapter::ModelFiles::open(tokenizer_path);
+        let files = super::adapter::ModelFiles::open(tokenizer_path)?;
         let config = files.json("config.json")?.unwrap_or_default();
         let mut model_type = config["model_type"].as_str().map(str::to_owned);
         // SGLang also recognizes V4.1 checkpoints that retain a V4 model_type.

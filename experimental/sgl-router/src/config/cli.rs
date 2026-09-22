@@ -5,7 +5,7 @@
 
 use anyhow::{anyhow, ensure, Result};
 use clap::Parser;
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::config::sampling::{parse_sampling_overrides, ConflictPolicy};
 use crate::config::{
@@ -92,6 +92,10 @@ pub struct ModelArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ServerArgs {
+    /// PEM CA bundle replacing outbound HTTPS trust roots, including Kubernetes roots.
+    #[arg(long, value_name = "FILE")]
+    pub tls_ca_bundle: Option<PathBuf>,
+
     /// Address to bind the HTTP server to.
     #[arg(long, default_value_t = default_host())]
     pub host: String,
@@ -363,6 +367,7 @@ impl Cli {
 
         let config = Config {
             server: ServerConfig {
+                tls_ca_bundle: self.server.tls_ca_bundle,
                 host: self.server.host,
                 port: self.server.port,
                 shutdown_drain_secs: self.server.shutdown_drain_secs,

@@ -350,7 +350,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tokenizer.json");
         std::fs::write(&path, "{}").unwrap();
-        let files = ModelFiles::open(path.to_str().unwrap());
+        let files = ModelFiles::open(path.to_str().unwrap()).unwrap();
         assert_eq!(
             V4Profile::load(&files, &json!({})).unwrap(),
             V4Profile::Preview

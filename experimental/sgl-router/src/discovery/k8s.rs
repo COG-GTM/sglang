@@ -12,7 +12,7 @@ use crate::discovery::{DiscoveryEvent, WorkerId, WorkerMode, WorkerSpec};
 use anyhow::{Context, Result};
 use futures::{Stream, StreamExt};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use kube::{api::Api, runtime::watcher, Client};
+use kube::{api::Api, runtime::watcher};
 use std::collections::{BTreeMap, HashMap};
 use tokio::sync::mpsc;
 
@@ -332,9 +332,10 @@ pub async fn spawn(
     // `Cli::build_discovery`); just destructure it here.
     let K8sDiscoveryConfig { namespace, mode } = cfg;
 
-    let client = Client::try_default()
+    let kube_config = kube::Config::infer()
         .await
         .context("kube client default config")?;
+    let client = crate::tls::kubernetes_client(kube_config)?;
 
     let api: Api<EndpointSlice> = if namespace.is_empty() {
         Api::all(client)
