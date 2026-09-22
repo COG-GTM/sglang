@@ -28,6 +28,8 @@ provider and TLS configuration, requires TLS 1.2 Extended Master Secret, and
 rejects a previously installed Rustls provider. It covers worker forwarding,
 introspection, engine monitoring, and Kubernetes API HTTPS. The default build
 continues to use ring for TLS.
+FIPS HTTP clients reject HTTPS-to-HTTP redirects while preserving HTTPS redirects
+and explicitly configured HTTP/h2c transport for mesh-protected deployments.
 
 The TLS policy explicitly selects AES-GCM cipher suites and P-384/P-256 key
 exchange groups instead of inheriting the runtime provider's algorithm list.

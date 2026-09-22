@@ -120,7 +120,18 @@ impl TlsSettings {
     }
 
     fn client_builder(&self) -> reqwest::ClientBuilder {
-        reqwest::Client::builder().use_preconfigured_tls(self.http.clone())
+        reqwest::Client::builder()
+            .use_preconfigured_tls(self.http.clone())
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if FIPS
+                    && attempt.url().scheme() != "https"
+                    && attempt.previous().iter().any(|url| url.scheme() == "https")
+                {
+                    attempt.error("FIPS build rejects HTTPS-to-HTTP redirects")
+                } else {
+                    reqwest::redirect::Policy::default().redirect(attempt)
+                }
+            }))
     }
 
     fn kubernetes_client(&self, mut config: kube::Config) -> Result<kube::Client> {
@@ -266,6 +277,22 @@ mod tests {
                     };
                     let service =
                         service_fn(|request: Request<hyper::body::Incoming>| async move {
+                            if request.uri().path() == "/redirect" {
+                                return Ok::<_, Infallible>(
+                                    Response::builder()
+                                        .status(307)
+                                        .header("location", request.uri().query().unwrap())
+                                        .body(Full::new(Bytes::new()))
+                                        .unwrap(),
+                                );
+                            }
+                            if request.uri().path() == "/loop" {
+                                return Ok(Response::builder()
+                                    .status(307)
+                                    .header("location", "/loop")
+                                    .body(Full::new(Bytes::new()))
+                                    .unwrap());
+                            }
                             let body = if request.uri().path() == "/auth" {
                                 format!(
                                     "{} {}",
@@ -335,6 +362,69 @@ mod tests {
                 assert!(format!("{error:?}").to_lowercase().contains("certificate"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn redirects_preserve_https_and_mesh_http_without_downgrading_fips_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain_url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route("/echo", axum::routing::post(|body: String| async { body }))
+            .route(
+                "/redirect",
+                axum::routing::post(|| async { axum::response::Redirect::temporary("/echo") }),
+            );
+        let plain_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let server = server(&rustls::version::TLS13, false).await;
+        let client = TlsSettings::load(Some(server.ca.path()))
+            .unwrap()
+            .client_builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let response = client
+            .post(format!("{}/redirect?{plain_url}/echo", server.url))
+            .body("test request")
+            .send()
+            .await;
+        if FIPS {
+            let error = response.unwrap_err();
+            assert!(error.is_redirect(), "{error:?}");
+            assert!(format!("{error:?}").contains("HTTPS-to-HTTP"));
+        } else {
+            assert_eq!(response.unwrap().text().await.unwrap(), "test request");
+        }
+        assert_eq!(
+            client
+                .post(format!("{plain_url}/redirect"))
+                .body("mesh request")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "mesh request"
+        );
+        assert_eq!(
+            client
+                .get(format!("{}/redirect?{}/", server.url, server.url))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "ok"
+        );
+        assert!(client
+            .get(format!("{}/loop", server.url))
+            .send()
+            .await
+            .unwrap_err()
+            .is_redirect());
+        plain_task.abort();
     }
 
     #[tokio::test]
