@@ -59,6 +59,26 @@ pins, and verification evidence belong in the deployment repository. See
 [Chainguard's Rust FIPS guide](https://images.chainguard.dev/directory/image/rust-fips/overview)
 and [runtime verification instructions](https://edu.chainguard.dev/chainguard/fips/verify-fips/#openssl).
 
+**AWS-LC evaluation backend.** `--features fips-aws-lc` uses Rustls's AWS-LC
+FIPS provider instead of runtime OpenSSL. It is mutually exclusive with
+`--features fips` and applies the same TLS algorithm, EMS, trust, redirect,
+and local-asset policy. Building requires CMake, Go, and a C/C++ toolchain;
+running the resulting binary does not require an OpenSSL provider.
+
+```bash
+cargo build --locked --release --features fips-aws-lc
+cargo test --locked --release --workspace --features fips-aws-lc -- --skip parity_matrix
+cargo deny --locked --features fips-aws-lc check
+```
+
+This is an evaluation option, not a qualified production configuration.
+The selected `aws-lc-rs` 1.18 series uses the AWS-LC FIPS 4 module family,
+which remains on the NIST Modules In Process list as of September 22, 2026.
+Its crate also requires a license not currently allowed by this repository;
+the policy is unchanged. A passing `fips()` check does not establish CMVP
+certification. See the [AWS-LC module mapping](https://docs.rs/aws-lc-rs/1.18.1/aws_lc_rs/#fips)
+and [NIST module status](https://csrc.nist.gov/projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list).
+
 **Trust and assets.** `--tls-ca-bundle FILE` optionally names a PEM file whose
 certificates replace the HTTPS trust roots, including Kubernetes roots. The
 bundle is read once at initialization; unreadable, empty, or invalid bundles

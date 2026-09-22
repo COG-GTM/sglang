@@ -23,6 +23,7 @@ unused_qualifications = "warn"
 
 [features]
 fips = ["dep:rustls-openssl", "dep:openssl"]
+fips-aws-lc = ["rustls/fips"]
 
 [dependencies]
 # Pin Dynamo versions and commit Cargo.lock so builds are reproducible.

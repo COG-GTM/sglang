@@ -6,6 +6,9 @@
 //! See `~/.claude/projects/-Users-kangyan-zhou-sglang-workspace-sglang/specs/2026-05-14-sgl-router-slim-design.md`
 //! for the design roadmap.
 
+#[cfg(all(feature = "fips", feature = "fips-aws-lc"))]
+compile_error!("select only one FIPS backend: fips or fips-aws-lc");
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod buckets_reorg;

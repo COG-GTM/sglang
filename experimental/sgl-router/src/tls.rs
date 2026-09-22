@@ -5,6 +5,8 @@
 
 use anyhow::{ensure, Context, Result};
 use kube::client::ConfigExt;
+#[cfg(all(feature = "fips-aws-lc", not(feature = "fips")))]
+use rustls::crypto::aws_lc_rs::{cipher_suite, kx_group};
 use rustls::{crypto::CryptoProvider, ClientConfig, RootCertStore};
 #[cfg(feature = "fips")]
 use rustls_openssl::{cipher_suite, kx_group};
@@ -12,7 +14,7 @@ use rustls_pki_types::{pem::PemObject, CertificateDer};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, OnceLock};
 
-pub(crate) const FIPS: bool = cfg!(feature = "fips");
+pub(crate) const FIPS: bool = cfg!(any(feature = "fips", feature = "fips-aws-lc"));
 
 struct ProviderState {
     crypto: Arc<CryptoProvider>,
@@ -51,21 +53,31 @@ struct TlsSettings {
 }
 
 fn provider() -> CryptoProvider {
-    #[cfg(feature = "fips")]
+    #[cfg(any(feature = "fips", feature = "fips-aws-lc"))]
     {
-        rustls_openssl::custom_provider(
-            vec![
-                cipher_suite::TLS13_AES_256_GCM_SHA384,
-                cipher_suite::TLS13_AES_128_GCM_SHA256,
-                cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-                cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-                cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-                cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-            ],
-            vec![kx_group::SECP384R1, kx_group::SECP256R1],
-        )
+        let cipher_suites = vec![
+            cipher_suite::TLS13_AES_256_GCM_SHA384,
+            cipher_suite::TLS13_AES_128_GCM_SHA256,
+            cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+            cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+            cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+            cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        ];
+        let kx_groups = vec![kx_group::SECP384R1, kx_group::SECP256R1];
+        #[cfg(feature = "fips")]
+        {
+            rustls_openssl::custom_provider(cipher_suites, kx_groups)
+        }
+        #[cfg(all(feature = "fips-aws-lc", not(feature = "fips")))]
+        {
+            CryptoProvider {
+                cipher_suites,
+                kx_groups,
+                ..rustls::crypto::aws_lc_rs::default_provider()
+            }
+        }
     }
-    #[cfg(not(feature = "fips"))]
+    #[cfg(not(any(feature = "fips", feature = "fips-aws-lc")))]
     {
         rustls::crypto::ring::default_provider()
     }
@@ -168,6 +180,8 @@ pub fn initialize(ca_bundle: Option<&Path>) -> Result<()> {
         openssl_version = openssl::version::version(),
         "outbound TLS uses the runtime OpenSSL FIPS provider"
     );
+    #[cfg(feature = "fips-aws-lc")]
+    tracing::info!("outbound TLS uses the embedded AWS-LC FIPS provider");
     Ok(())
 }
 
@@ -189,7 +203,7 @@ mod tests {
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use kube::client::ConfigExt;
     use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose};
-    #[cfg(feature = "fips")]
+    #[cfg(any(feature = "fips", feature = "fips-aws-lc"))]
     use rustls::{CipherSuite, NamedGroup};
     use rustls::{ServerConfig, SupportedProtocolVersion};
     use rustls_pki_types::PrivatePkcs8KeyDer;
@@ -210,7 +224,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "fips")]
+    #[cfg(any(feature = "fips", feature = "fips-aws-lc"))]
     #[test]
     fn fips_algorithms_do_not_expand_with_runtime_provider_capabilities() {
         TlsSettings::load(None).unwrap();
