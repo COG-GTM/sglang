@@ -40,7 +40,7 @@ async fn invalid_ca_bundle_stops_the_binary_before_serving() {
     assert!(stderr.contains("contains no certificates"), "{stderr}");
 }
 
-#[cfg(feature = "fips-openssl")]
+#[cfg(feature = "fips")]
 #[tokio::test]
 async fn openssl_without_fips_properties_stops_the_binary() {
     let config = tempfile::NamedTempFile::new().unwrap();
@@ -90,7 +90,7 @@ async fn https_indexer_endpoint_stops_the_binary_before_plaintext_transport() {
     );
 }
 
-#[cfg(feature = "fips-openssl")]
+#[cfg(feature = "fips")]
 #[tokio::test]
 async fn missing_openssl_module_stops_the_binary_without_a_crypto_fallback() {
     let empty = tempfile::tempdir().unwrap();

@@ -4,24 +4,24 @@
 //! Outbound TLS provider and optional exclusive CA bundle.
 
 use anyhow::{ensure, Context, Result};
+use kube::client::ConfigExt;
 use rustls::{crypto::CryptoProvider, ClientConfig, RootCertStore};
+#[cfg(feature = "fips")]
+use rustls_openssl::{cipher_suite, kx_group};
 use rustls_pki_types::{pem::PemObject, CertificateDer};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, OnceLock};
 
-#[cfg(all(feature = "fips-aws-lc", feature = "fips-openssl"))]
-compile_error!("select only one FIPS backend: fips-openssl (or fips) or fips-aws-lc");
-
-pub(crate) const FIPS: bool = cfg!(any(feature = "fips-aws-lc", feature = "fips-openssl"));
+pub(crate) const FIPS: bool = cfg!(feature = "fips");
 
 struct ProviderState {
     crypto: Arc<CryptoProvider>,
-    #[cfg(feature = "fips-openssl")]
+    #[cfg(feature = "fips")]
     _openssl: openssl::provider::Provider,
 }
 
 static PROVIDER: LazyLock<Result<ProviderState>> = LazyLock::new(|| {
-    #[cfg(feature = "fips-openssl")]
+    #[cfg(feature = "fips")]
     let openssl = openssl::provider::Provider::load(None, "fips")
         .context("load OpenSSL FIPS provider; check the runtime image and OPENSSL_CONF")?;
     let crypto = provider();
@@ -38,7 +38,7 @@ static PROVIDER: LazyLock<Result<ProviderState>> = LazyLock::new(|| {
         .map_err(|_| anyhow::anyhow!("initialize TLS random generator"))?;
     Ok(ProviderState {
         crypto: Arc::new(crypto),
-        #[cfg(feature = "fips-openssl")]
+        #[cfg(feature = "fips")]
         _openssl: openssl,
     })
 });
@@ -51,15 +51,21 @@ struct TlsSettings {
 }
 
 fn provider() -> CryptoProvider {
-    #[cfg(feature = "fips-openssl")]
+    #[cfg(feature = "fips")]
     {
-        rustls_openssl::default_provider()
+        rustls_openssl::custom_provider(
+            vec![
+                cipher_suite::TLS13_AES_256_GCM_SHA384,
+                cipher_suite::TLS13_AES_128_GCM_SHA256,
+                cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+                cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+                cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+            ],
+            vec![kx_group::SECP384R1, kx_group::SECP256R1],
+        )
     }
-    #[cfg(all(feature = "fips-aws-lc", not(feature = "fips-openssl")))]
-    {
-        rustls::crypto::aws_lc_rs::default_provider()
-    }
-    #[cfg(not(any(feature = "fips-aws-lc", feature = "fips-openssl")))]
+    #[cfg(not(feature = "fips"))]
     {
         rustls::crypto::ring::default_provider()
     }
@@ -125,14 +131,11 @@ impl TlsSettings {
         if let Some(roots) = &self.roots {
             config.root_cert = Some(roots.iter().map(|cert| cert.to_vec()).collect());
         }
-        #[cfg(feature = "fips-openssl")]
-        {
-            kubernetes_openssl::client(config)
-        }
-        #[cfg(not(feature = "fips-openssl"))]
-        {
-            kube::Client::try_from(config).context("configure Kubernetes TLS client")
-        }
+        ensure!(
+            !FIPS || config.rustls_client_config()?.fips(),
+            "Kubernetes TLS configuration is not in FIPS mode"
+        );
+        kube::Client::try_from(config).context("configure Kubernetes TLS client")
     }
 }
 
@@ -149,13 +152,7 @@ pub fn initialize(ca_bundle: Option<&Path>) -> Result<()> {
         "outbound TLS is already initialized"
     );
     settings()?;
-    #[cfg(feature = "fips-aws-lc")]
-    tracing::info!(
-        aws_lc_version = aws_lc_rs::awslc_version(),
-        fips_module = ?aws_lc_rs::fips_version(),
-        "outbound TLS uses AWS-LC in FIPS mode"
-    );
-    #[cfg(feature = "fips-openssl")]
+    #[cfg(feature = "fips")]
     tracing::info!(
         openssl_version = openssl::version::version(),
         "outbound TLS uses the runtime OpenSSL FIPS provider"
@@ -171,52 +168,6 @@ pub(crate) fn kubernetes_client(config: kube::Config) -> Result<kube::Client> {
     settings()?.kubernetes_client(config)
 }
 
-#[cfg(feature = "fips-openssl")]
-mod kubernetes_openssl {
-    use anyhow::{ensure, Context, Result};
-    use hyper_rustls::{FixedServerNameResolver, HttpsConnectorBuilder};
-    use hyper_timeout::TimeoutConnector;
-    use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
-    use kube::client::{Body, ConfigExt};
-    use tower::ServiceBuilder;
-    use tower_http::trace::TraceLayer;
-
-    pub(super) fn client(config: kube::Config) -> Result<kube::Client> {
-        let mut tls = config.rustls_client_config()?;
-        tls.require_ems = true;
-        ensure!(
-            tls.fips(),
-            "Kubernetes TLS configuration is not in FIPS mode"
-        );
-        let mut https = HttpsConnectorBuilder::new()
-            .with_tls_config(tls)
-            .https_or_http();
-        if let Some(name) = &config.tls_server_name {
-            https = https.with_server_name_resolver(FixedServerNameResolver::new(
-                name.clone()
-                    .try_into()
-                    .context("invalid Kubernetes TLS server name")?,
-            ));
-        }
-        let mut http = HttpConnector::new();
-        http.enforce_http(false);
-        let mut connector = TimeoutConnector::new(https.enable_http1().wrap_connector(http));
-        connector.set_connect_timeout(config.connect_timeout);
-        connector.set_read_timeout(config.read_timeout);
-        connector.set_write_timeout(config.write_timeout);
-        let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-            .build::<_, Body>(connector);
-        let service = ServiceBuilder::new()
-            .layer(config.base_uri_layer())
-            .option_layer(config.auth_layer()?)
-            .layer(config.extra_headers_layer()?)
-            .layer(TraceLayer::new_for_http())
-            .map_err(tower::BoxError::from)
-            .service(client);
-        Ok(kube::Client::new(service, config.default_namespace))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{require_fips_provider, TlsSettings, FIPS};
@@ -225,7 +176,10 @@ mod tests {
     use http_body_util::Full;
     use hyper::service::service_fn;
     use hyper_util::rt::{TokioExecutor, TokioIo};
+    use kube::client::ConfigExt;
     use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose};
+    #[cfg(feature = "fips")]
+    use rustls::{CipherSuite, NamedGroup};
     use rustls::{ServerConfig, SupportedProtocolVersion};
     use rustls_pki_types::PrivatePkcs8KeyDer;
     use std::{convert::Infallible, io::Write, sync::Arc, time::Duration};
@@ -243,6 +197,30 @@ mod tests {
         fn drop(&mut self) {
             self.task.abort();
         }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn fips_algorithms_do_not_expand_with_runtime_provider_capabilities() {
+        TlsSettings::load(None).unwrap();
+        let provider = &super::PROVIDER.as_ref().unwrap().crypto;
+        assert_eq!(
+            provider
+                .kx_groups
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            [NamedGroup::secp384r1, NamedGroup::secp256r1]
+        );
+        assert!(provider.cipher_suites.iter().all(|suite| matches!(
+            suite.suite(),
+            CipherSuite::TLS13_AES_256_GCM_SHA384
+                | CipherSuite::TLS13_AES_128_GCM_SHA256
+                | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                | CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                | CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        )));
     }
 
     async fn server(version: &'static SupportedProtocolVersion, h2: bool) -> Server {
@@ -378,6 +356,9 @@ mod tests {
         config.auth_info.token = Some("test-token".into());
         config.headers = vec![("x-test".parse().unwrap(), "configured".parse().unwrap())];
         let settings = TlsSettings::load(None).unwrap();
+        let tls = config.rustls_client_config().unwrap();
+        assert_eq!(tls.require_ems, FIPS);
+        assert_eq!(tls.fips(), FIPS);
         let client = settings.kubernetes_client(config.clone()).unwrap();
         let response = client
             .request_text(Request::get("/auth").body(Vec::new()).unwrap())

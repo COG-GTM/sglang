@@ -239,7 +239,7 @@ mod model_files_tests {
     }
 
     #[test]
-    #[cfg(any(feature = "fips", feature = "fips-aws-lc", feature = "fips-openssl"))]
+    #[cfg(feature = "fips")]
     fn remote_tokenizer_and_sibling_sources_are_rejected() {
         for source in ["organization/model", "gpt2"] {
             let error = super::load(source)

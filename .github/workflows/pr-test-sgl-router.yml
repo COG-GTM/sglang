@@ -263,15 +263,11 @@ jobs:
           echo "- Build duration: \`${tier_2_build_duration_seconds:-(not recorded)}\` s" >> "$GITHUB_STEP_SUMMARY"
 
   sgl-router-fips:
-    name: tier-2 — ${{ matrix.feature }}
+    name: tier-2 — fips
     needs: [sgl-router-gate, sgl-router-lint]
     if: needs.sgl-router-gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        feature: [fips, fips-aws-lc]
     steps:
       - uses: actions/checkout@v4
       - name: Install protoc
@@ -279,15 +275,14 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake golang-go perl clang libclang-dev libssl-dev pkg-config
+          sudo apt-get install -y build-essential perl libssl-dev pkg-config
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: experimental/sgl-router
-          shared-key: "sgl-router-${{ matrix.feature }}"
+          shared-key: "sgl-router-fips"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build OpenSSL test provider
-        if: matrix.feature == 'fips'
         working-directory: experimental/sgl-router
         run: |
           prefix="$HOME/sgl-router-test-openssl"
@@ -299,19 +294,14 @@ jobs:
       - name: Check and lint FIPS backend
         working-directory: experimental/sgl-router
         run: |
-          cargo check --locked --workspace --all-targets --features "${{ matrix.feature }}"
-          cargo clippy --locked --workspace --all-targets --features "${{ matrix.feature }}" -- -D warnings
-      - name: Check documented AWS-LC module dependency
-        if: matrix.feature == 'fips-aws-lc'
-        working-directory: experimental/sgl-router
-        run: cargo tree --locked --features fips-aws-lc -i aws-lc-fips-sys@0.14.2
+          cargo check --locked --workspace --all-targets --features fips
+          cargo clippy --locked --workspace --all-targets --features fips -- -D warnings
       - name: Build and test FIPS backend
         working-directory: experimental/sgl-router
         run: |
-          cargo build --locked --release --workspace --features "${{ matrix.feature }}"
-          cargo test --locked --release --workspace --features "${{ matrix.feature }}" -- --skip parity_matrix
+          cargo build --locked --release --workspace --features fips
+          cargo test --locked --release --workspace --features fips -- --skip parity_matrix
       - name: Verify dynamic OpenSSL linkage
-        if: matrix.feature == 'fips'
         working-directory: experimental/sgl-router
         run: |
           LD_LIBRARY_PATH="$OPENSSL_DIR/lib" python3 - <<'PY'
