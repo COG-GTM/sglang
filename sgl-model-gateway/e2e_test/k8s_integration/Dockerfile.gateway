@@ -7,7 +7,11 @@
 # production. This Dockerfile builds just the Rust binary in ~5 min on a
 # warm cache.
 
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.93.0-bookworm AS builder
+
+# Match the image's toolchain name so rustup does not re-download the
+# channel pinned in rust-toolchain.toml.
+ENV RUSTUP_TOOLCHAIN=1.93.0
 
 RUN apt-get update && apt-get install -y \
     libssl-dev pkg-config protobuf-compiler cmake \
