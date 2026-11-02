@@ -15,6 +15,11 @@ ignore = [
     # shim that re-exports webpki-roots 1.x, locked at the fixed 1.0.10; it
     # bundles no roots of its own. Drop once ureq 2 leaves the tree.
     { id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports the patched webpki-roots 1.0.10" },
+    # pulldown-cmark 0.13.5 is a build dependency only (prost-build <-
+    # tonic-prost-build <- sgl-kv-indexer's build script): it parses this
+    # repo's own .proto doc comments at build time and is not in the router
+    # binary. Drop once pulldown-cmark >= 0.13.6 is in the lockfile.
+    { id = "RUSTSEC-2026-0433", reason = "build-time only; parses this repo's own .proto comments" },
 ]
 
 [licenses]
